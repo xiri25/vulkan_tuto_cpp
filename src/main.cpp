@@ -592,6 +592,13 @@ void vk_context::createLogicalDevice()
     deviceQueueCreateInfo.pQueuePriorities = &queuePriority;
 
     vk::DeviceCreateInfo deviceCreateInfo = {};
+
+    /*
+     * NOTE: No entiendo esto muy bien, le pasa el pointer
+     * hace falta el .get<vk::PhysicalDeviceFeatures2>()
+     * entiendo que funciona como una especie de cast
+     * pero pNext es void*
+    */
     deviceCreateInfo.pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>();
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &deviceQueueCreateInfo;
