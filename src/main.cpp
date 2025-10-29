@@ -166,7 +166,6 @@ private:
         vk::KHRSpirv14ExtensionName,
         vk::KHRSynchronization2ExtensionName,
         vk::KHRCreateRenderpass2ExtensionName,
-        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
     };
 
     void initWindow();
