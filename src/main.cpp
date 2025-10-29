@@ -43,6 +43,16 @@ import vulkan_hpp;
 // #include <tinyobjloader/tiny_obj_loader.h>
 #include "../vendor/tinyobjloader/tiny_obj_loader.h"
 
+#define LOG_FUNCTIONS 1
+#if LOG_FUNCTIONS
+#define LOG_FUNCTION() \
+    printf("Function %s() called in %s at line %d\n", __func__, __FILE__, __LINE__);
+#else
+#define LOG_FUNCTION()
+#endif
+
+#define ASSERT(x) (assert(x))
+
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 const std::string MODEL_PATH = "models/viking_room.obj";
@@ -96,6 +106,7 @@ struct UniformBufferObject {
 class vk_context {
 public:
     void run();
+    ~vk_context();
 private:
     GLFWwindow *                     window = nullptr;
     vk::raii::Context                context;
@@ -229,6 +240,7 @@ private:
     void createSyncObjects();
     void initVulkan();
     void updateUniformBuffer(uint32_t currentImage) const;
+
 };
 
 void vk_context::transitionImageLayout(const vk::raii::Image& image,
@@ -362,6 +374,9 @@ void vk_context::cleanupSwapChain()
 
 void vk_context::cleanup() const
 {
+    LOG_FUNCTION()
+    ASSERT(window != NULL);
+
     glfwDestroyWindow(window);
 
     glfwTerminate();
@@ -550,14 +565,24 @@ void vk_context::createLogicalDevice()
         throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
     }
 
+    vk::PhysicalDeviceFeatures2 physicalDeviceFeatures2 = {};
+    physicalDeviceFeatures2.features.samplerAnisotropy = VK_TRUE;
+
+    vk::PhysicalDeviceVulkan13Features vk13_features = {};
+    vk13_features.synchronization2 = VK_TRUE;
+    vk13_features.dynamicRendering = VK_TRUE;
+
+    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extended_features = {};
+    extended_features.extendedDynamicState = VK_TRUE;
+
     // query for Vulkan 1.3 features
     // WTF is this shit and why
     vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
                        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
     featureChain(
-        vk::PhysicalDeviceFeatures2{VK_TRUE},                          // samplerAnisotropy
-        vk::PhysicalDeviceVulkan13Features{VK_TRUE, VK_TRUE},          // synchronization2, dynamicRendering
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{VK_TRUE}     // extendedDynamicState
+            physicalDeviceFeatures2,
+            vk13_features,
+            extended_features
     );
 
     // create a Device
@@ -1410,6 +1435,11 @@ vk::Extent2D vk_context::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capa
         };
 }
 
+vk_context::~vk_context()
+{
+    LOG_FUNCTION()
+}
+
 void vk_context::run() {
     initWindow();
     initVulkan();
@@ -1421,10 +1451,23 @@ int main() {
     try {
         vk_context app;
         app.run();
+        app.~vk_context();
+
+        // Aqui segfault, el destructor ya se ha llamado
+        // Creo que puede ser por lo de que dynamicRendering no se ha activado
+        // EL codigo del tutorial sin modificar tambien segfault
+        // aunque sin quejas de validationLayers
+        // Parece que los compila para c++11 sin -g
+        // las validation layers estan activas
+
+        std::cout << "Hola" << std::endl;
+
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return EXIT_FAILURE;
     }
+
+    std::cout << "I hate cpp" << std::endl;
 
     return EXIT_SUCCESS;
 }
