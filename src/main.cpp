@@ -1,4 +1,5 @@
 #include "vulkan/vulkan.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <fstream>
@@ -131,6 +132,8 @@ private:
     vk::raii::DeviceMemory depthImageMemory = nullptr;
     vk::raii::ImageView depthImageView = nullptr;
 
+    uint32_t mipLevels;
+    /* Añadiendo mipLevele cambia la textura a un unique_ptr idk why */
     vk::raii::Image textureImage = nullptr;
     vk::raii::DeviceMemory textureImageMemory = nullptr;
     vk::raii::ImageView textureImageView = nullptr;
@@ -192,9 +195,12 @@ private:
     vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) const;
     vk::Format findDepthFormat() const;
     void createCommandPool();
-    vk::raii::ImageView createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags);
+    vk::raii::ImageView createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLeves);
+
+    /* TODO: Esto no tiene pinta de ser un metodo */
     void createImage(uint32_t width,
                      uint32_t height,
+                     uint32_t mipLevels,
                      vk::Format format,
                      vk::ImageTiling tiling,
                      vk::ImageUsageFlags usage,
@@ -213,9 +219,11 @@ private:
     std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands();
     void endSingleTimeCommands(const vk::raii::CommandBuffer& commandBuffer) const;
     void copyBuffer(vk::raii::Buffer & srcBuffer, vk::raii::Buffer & dstBuffer, vk::DeviceSize size);
+    /* TODO: Esto no tiene pinta de ser un metodo, porque tengo tambien transition_image_layout() wtf? (el tuto tambien) */
     void transitionImageLayout(const vk::raii::Image& image,
                                vk::ImageLayout oldLayout,
-                               vk::ImageLayout newLayout);
+                               vk::ImageLayout newLayout,
+                               uint32_t mipLevels);
     void copyBufferToImage(const vk::raii::Buffer& buffer,
                            vk::raii::Image& image,
                            uint32_t width,
@@ -239,13 +247,21 @@ private:
     void createSyncObjects();
     void initVulkan();
     void updateUniformBuffer(uint32_t currentImage) const;
+    void generateMipmaps(vk::raii::Image& image,
+                         vk::Format imageFormat,
+                         int32_t texWidth,
+                         int32_t texHeight,
+                         uint32_t mipLevels);
 
 };
 
 void vk_context::transitionImageLayout(const vk::raii::Image& image,
-                           vk::ImageLayout oldLayout,
-                           vk::ImageLayout newLayout)
+                                       vk::ImageLayout oldLayout,
+                                       vk::ImageLayout newLayout,
+                                       uint32_t mipLevels)
 {
+    LOG_FUNCTION()
+
     auto commandBuffer = beginSingleTimeCommands();
 
     vk::ImageMemoryBarrier barrier = {};
@@ -253,6 +269,7 @@ void vk_context::transitionImageLayout(const vk::raii::Image& image,
     barrier.newLayout = newLayout;
     barrier.image = image;
     barrier.subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+    barrier.subresourceRange.levelCount = mipLevels;
 
     vk::PipelineStageFlags sourceStage;
     vk::PipelineStageFlags destinationStage;
@@ -335,6 +352,8 @@ static std::vector<char> readFile(const std::string& filename) {
 
 void vk_context::initWindow()
 {
+    LOG_FUNCTION()
+
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -347,7 +366,12 @@ void vk_context::initWindow()
 
 void vk_context::framebufferResizeCallback(GLFWwindow* window, int width, int height)
 {
-    /* TODO: Does this matter, or can i make the compiler stop bitching about not being used */
+    LOG_FUNCTION()
+
+    /*
+     * TODO: Does this matter, or can i make the compiler stop bitching about not being used
+     * it does not seems to matter
+    */
     (void)width;
     (void)height;
 
@@ -357,6 +381,8 @@ void vk_context::framebufferResizeCallback(GLFWwindow* window, int width, int he
 
 void vk_context::mainLoop()
 {
+    LOG_FUNCTION()
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         drawFrame();
@@ -367,6 +393,8 @@ void vk_context::mainLoop()
 
 void vk_context::cleanupSwapChain()
 {
+    LOG_FUNCTION()
+
     swapChainImageViews.clear();
     swapChain = nullptr;
 }
@@ -376,6 +404,12 @@ void vk_context::cleanup() const
     LOG_FUNCTION()
     ASSERT(window != NULL);
 
+    /*
+     * El cleanup de vulkan lo hace los propios tipos
+     * vk::raii::Device != VkDevice
+     * es un wrapper
+    */
+
     glfwDestroyWindow(window);
 
     glfwTerminate();
@@ -383,6 +417,8 @@ void vk_context::cleanup() const
 
 void vk_context::createSwapChain()
 {
+    LOG_FUNCTION()
+
     auto surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
     swapChainExtent          = chooseSwapExtent(surfaceCapabilities);
     swapChainSurfaceFormat   = chooseSwapSurfaceFormat(physicalDevice.getSurfaceFormatsKHR(*surface));
@@ -406,6 +442,8 @@ void vk_context::createSwapChain()
 
 void vk_context::recreateSwapChain()
 {
+    LOG_FUNCTION()
+
     int width = 0, height = 0;
     glfwGetFramebufferSize(window, &width, &height);
     while (width == 0 || height == 0) {
@@ -423,6 +461,8 @@ void vk_context::recreateSwapChain()
 
 void vk_context::createInstance()
 {
+    LOG_FUNCTION()
+
     // WTF is this shit and why
     constexpr vk::ApplicationInfo appInfo(
         "Hello Triangle",                     // pApplicationName
@@ -477,6 +517,8 @@ void vk_context::createInstance()
 
 void vk_context::setupDebugMessenger()
 {
+    LOG_FUNCTION()
+
     if (!enableValidationLayers) return;
 
     vk::DebugUtilsMessageSeverityFlagsEXT severityFlags( vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError );
@@ -492,6 +534,8 @@ void vk_context::setupDebugMessenger()
 
 void vk_context::createSurface()
 {
+    LOG_FUNCTION()
+
     VkSurfaceKHR       _surface;
     if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0) {
         throw std::runtime_error("failed to create window surface!");
@@ -501,6 +545,8 @@ void vk_context::createSurface()
 
 void vk_context::pickPhysicalDevice()
 {
+    LOG_FUNCTION()
+
     std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
     const auto                            devIter = std::ranges::find_if(
       devices,
@@ -544,6 +590,8 @@ void vk_context::pickPhysicalDevice()
 
 void vk_context::createLogicalDevice()
 {
+    LOG_FUNCTION()
+
     std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
     // get the first index into queueFamilyProperties which supports both graphics and present
@@ -611,6 +659,8 @@ void vk_context::createLogicalDevice()
 
 void vk_context::createImageViews()
 {
+    LOG_FUNCTION()
+
     assert(swapChainImageViews.empty());
 
     vk::ImageViewCreateInfo imageViewCreateInfo = {};
@@ -627,6 +677,8 @@ void vk_context::createImageViews()
 
 void vk_context::createDescriptorSetLayout()
 {
+    LOG_FUNCTION()
+
     std::array bindings = {
         vk::DescriptorSetLayoutBinding( 0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex, nullptr),
         vk::DescriptorSetLayoutBinding( 1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment, nullptr)
@@ -641,6 +693,8 @@ void vk_context::createDescriptorSetLayout()
 
 void vk_context::createGraphicsPipeline()
 {
+    LOG_FUNCTION()
+
     vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
 
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo ={};
@@ -748,6 +802,8 @@ void vk_context::createGraphicsPipeline()
 
 void vk_context::createCommandPool()
 {
+    LOG_FUNCTION()
+
     vk::CommandPoolCreateInfo poolInfo= {};
     poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
     poolInfo.queueFamilyIndex = queueIndex;
@@ -757,13 +813,28 @@ void vk_context::createCommandPool()
 
 void vk_context::createDepthResources()
 {
+    LOG_FUNCTION()
+
     vk::Format depthFormat = findDepthFormat();
 
-    createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);
-    depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);
+    createImage(swapChainExtent.width,
+                swapChainExtent.height,
+                1,
+                depthFormat,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                vk::MemoryPropertyFlagBits::eDeviceLocal,
+                depthImage,
+                depthImageMemory);
+    depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, mipLevels);
 }
 
-vk::Format vk_context::findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) const {
+vk::Format vk_context::findSupportedFormat(const std::vector<vk::Format>& candidates,
+                                           vk::ImageTiling tiling,
+                                           vk::FormatFeatureFlags features) const
+{
+    LOG_FUNCTION()
+
     for (const auto format : candidates) {
         vk::FormatProperties props = physicalDevice.getFormatProperties(format);
 
@@ -778,7 +849,10 @@ vk::Format vk_context::findSupportedFormat(const std::vector<vk::Format>& candid
     throw std::runtime_error("failed to find supported format!");
 }
 
-[[nodiscard]] vk::Format vk_context::findDepthFormat() const {
+[[nodiscard]] vk::Format vk_context::findDepthFormat() const
+{
+    LOG_FUNCTION()
+
     return findSupportedFormat(
     {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
         vk::ImageTiling::eOptimal,
@@ -786,15 +860,215 @@ vk::Format vk_context::findSupportedFormat(const std::vector<vk::Format>& candid
     );
 }
 
-static bool hasStencilComponent(vk::Format format) {
+static bool hasStencilComponent(vk::Format format)
+{
+    LOG_FUNCTION()
+
     return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint;
+}
+
+/* Is this a method, acts like one */
+void vk_context::generateMipmaps(vk::raii::Image& image,
+                                 vk::Format imageFormat,
+                                 int32_t texWidth,
+                                 int32_t texHeight,
+                                 uint32_t mipLevels)
+{
+    LOG_FUNCTION()
+
+    /*
+     * It is very convenient to use a built-in function like vkCmdBlitImage
+     * to generate all the mip levels, but unfortunately it is not guaranteed
+     * to be supported on all platforms. It requires the texture image format
+     * we use to support linear filtering, which can be checked with the
+     * vkGetPhysicalDeviceFormatProperties function
+     * TODO: Do not check with the function, store the result in the class
+    */
+
+    /* NOTE: Probablemente irrelevante, pero aqui el tutorial trata a physical device como pointer physicalDevice->get...() */
+    vk::FormatProperties formatProperties = physicalDevice.getFormatProperties(imageFormat);
+    /*
+     * The VkFormatProperties struct has three fields
+     * named linearTilingFeatures, optimalTilingFeatures
+     * and bufferFeatures that each describe how the format
+     * can be used depending on the way it is used. We create
+     * a texture image with the optimal tiling format,
+     * so we need to check optimalTilingFeatures. Support for
+     * the linear filtering feature can be checked with the
+     * VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT:
+    */
+    if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear)) {
+        throw std::runtime_error("texture image format does not support linear blitting!");
+    }
+
+    /*
+     * There are two alternatives in this case. You could implement a
+     * function that searches common texture image formats for one that
+     * does support linear blitting, or you could implement the mipmap
+     * generation in software with a library like stb_image_resize.
+     * Each mip level can then be loaded into the image in the same
+     * way that you loaded the original image.It should be noted that
+     * it is uncommon in practice to generate the mipmap levels at
+     * runtime anyway. Usually they are pre-generated and stored in
+     * the texture file alongside the base level to improve loading speed.
+     * Implementing resizing in software and loading multiple levels
+     * from a file is left as an exercise to the reader.
+    */
+
+    std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();
+
+    vk::ImageMemoryBarrier barrier (vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead
+                               , vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal
+                               , vk::QueueFamilyIgnored, vk::QueueFamilyIgnored, image);
+    // barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; // overloading XD
+    // Muy util para buscar tanto c como cpp enums https://codebrowser.dev/flutter_engine/flutter_engine/third_party/vulkan-deps/vulkan-headers/src/include/vulkan/vulkan_enums.hpp.html
+    barrier.subresourceRange.setAspectMask(vk::ImageAspectFlagBits::eColor);
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.levelCount = 1;
+
+    int32_t mipWidth = texWidth;
+    int32_t mipHeight = texHeight;
+
+    /*
+     * This loop will record each of the VkCmdBlitImage commands.
+     * Note that the loop variable starts at 1, not 0.
+    */
+    for (uint32_t i = 1; i < mipLevels; i++) {
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+        barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+
+        commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                       vk::PipelineStageFlagBits::eTransfer,
+                                       {}, {}, {}, barrier);
+        /*
+         * First, we transition level i - 1 to VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
+         * This transition will wait for level i - 1 to be filled,
+         * either from the previous blit command, or from vkCmdCopyBufferToImage.
+         * The current blit command will wait on this transition.
+        */
+        vk::ArrayWrapper1D<vk::Offset3D, 2> offsets, dstOffsets;
+        offsets[0] = vk::Offset3D(0, 0, 0);
+        offsets[1] = vk::Offset3D(mipWidth, mipHeight, 1);
+        dstOffsets[0] = vk::Offset3D(0, 0, 0);
+        dstOffsets[1] = vk::Offset3D(mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1);
+        vk::ImageBlit blit = {};
+        /* NOTE: Otra vez que = resulta que overlodea un operator */
+        // blit.srcSubresource = {};
+        blit.srcSubresource.aspectMask = {};
+        blit.srcSubresource.baseArrayLayer = {};
+        blit.srcSubresource.layerCount = {};
+        blit.srcSubresource.mipLevel = {};
+        blit.srcOffsets = offsets;
+        /* NOTE: Otra vez que = resulta que overlodea un operator */
+        // blit.dstSubresource = {};
+        blit.dstSubresource.aspectMask = {};
+        blit.dstSubresource.baseArrayLayer = {};
+        blit.dstSubresource.layerCount = {};
+        blit.dstSubresource.mipLevel = {};
+        blit.dstOffsets = dstOffsets;
+        blit.srcSubresource = vk::ImageSubresourceLayers( vk::ImageAspectFlagBits::eColor, i - 1, 0, 1);
+        blit.dstSubresource = vk::ImageSubresourceLayers( vk::ImageAspectFlagBits::eColor, i, 0, 1);
+
+        /*
+         * Next, we specify the regions that will be used in the blit operation.
+         * The source mip level is i - 1 and the destination mip level is i.
+         * The two elements of the srcOffsets array determine the 3D region
+         * that data will be blitted from. dstOffsets determines the region
+         * that data will be blitted to. The X and Y dimensions of the dstOffsets[1]
+         * are divided by two since each mip level is half the size of
+         * the previous level. The Z dimension of srcOffsets[1]
+         * and dstOffsets[1] must be 1, since a 2D image has a depth of 1.
+        */
+        commandBuffer->blitImage(image,
+                                 vk::ImageLayout::eTransferSrcOptimal,
+                                 image,
+                                 vk::ImageLayout::eTransferDstOptimal,
+                                 { blit },
+                                 vk::Filter::eLinear);
+        /*
+         * Note that textureImage is used for both the srcImage and
+         * dstImage parameter. This is because we’re blitting between
+         * different levels of the same image. The source mip level
+         * was just transitioned to VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+         * and the destination level is still in
+         * VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL from createTextureImage
+         * 
+         * The last parameter allows us to specify a VkFilter to use in
+         * the blit. We have the same filtering options here that we
+         * had when making the VkSampler. We use the VK_FILTER_LINEAR
+         * to enable interpolation.
+        */
+
+        /*
+         * NOTE:
+         * Beware if you are using a dedicated transfer queue
+         * (as suggested in Vertex buffers): vkCmdBlitImage
+         * must be submitted to a queue with graphics capability.
+        */
+
+        barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+        commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                       vk::PipelineStageFlagBits::eFragmentShader,
+                                       {}, {}, {}, barrier);
+
+        /*
+         * This barrier transitions mip level i - 1 to
+         * VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+         * This transition waits on the current blit command
+         * to finish. All sampling operations will wait on
+         * this transition to finish.
+        */
+
+        if (mipWidth > 1) mipWidth /= 2;
+        if (mipHeight > 1) mipHeight /= 2;
+    }
+
+    barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+    barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+    commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                   vk::PipelineStageFlagBits::eFragmentShader,
+                                   {}, {}, {}, barrier);
+    /*
+     * Before we end the command buffer, we insert one more pipeline barrier.
+     * This barrier transitions the last mip level from
+     * VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+     * The loop didn’t handle this, since the last mip level is never blitted from.
+    */
+
+    endSingleTimeCommands(*commandBuffer);
+
 }
 
 void vk_context::createTextureImage()
 {
+    LOG_FUNCTION()
+
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     vk::DeviceSize imageSize = texWidth * texHeight * 4;
+
+    /*
+     * This calculates the number of levels in the mip chain.
+     * The max function selects the largest dimension.
+     * The log2 function calculates how many times that
+     * dimension can be divided by 2. The floor function
+     * handles cases where the largest dimension is not
+     * a power of 2. 1 is added so that the original
+     * image has a mip level.
+    */
+    mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 
     if (!pixels) {
         throw std::runtime_error("failed to load texture image!");
@@ -810,20 +1084,57 @@ void vk_context::createTextureImage()
 
     stbi_image_free(pixels);
 
-    createImage(texWidth, texHeight, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal, textureImage, textureImageMemory);
+    /*
+     * Our texture image now has multiple mip levels, but the staging
+     * buffer can only be used to fill mip level 0. The other levels
+     * are still undefined. To fill these levels, we need to generate
+     * the data from the single level that we have. We will use the
+     * vkCmdBlitImage command. This command performs copying, scaling,
+     * and filtering operations. We will call this multiple times to
+     * blit data to each level of our texture image.vkCmdBlitImage
+     * is considered a transfer operation, so we must inform Vulkan
+     * that we intend to use the texture image as both the source
+     * and destination of a transfer. Add VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+     * to the texture image’s usage flags in createTextureImage:
+    */
 
-    transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    createImage(texWidth, texHeight, mipLevels,
+                vk::Format::eR8G8B8A8Srgb,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                vk::MemoryPropertyFlagBits::eDeviceLocal,
+                textureImage, textureImageMemory);
+
+    /*
+     * Like other image operations, vkCmdBlitImage depends on the layout
+     * of the image it operates on. We could transition the entire image
+     * to VK_IMAGE_LAYOUT_GENERAL, but this will most likely be slow.
+     * For optimal performance, the source image should be in
+     * VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL and the destination
+     * image should be in VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
+     * Vulkan allows us to transition each mip level of an image
+     * independently. Each blit will only deal with two mip levels
+     * at a time, so we can transition each level into the optimal
+     * layout between blits commands.
+    */
+
+    transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
     copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-    transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    // transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
+    generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, mipLevels);
+                
 }
 
 void vk_context::createTextureImageView()
 {
-    textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+    LOG_FUNCTION()
+    textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor, mipLevels);
 }
 
 void vk_context::createTextureSampler()
 {
+    LOG_FUNCTION()
+
     vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
     vk::SamplerCreateInfo samplerInfo = {};
     samplerInfo.magFilter = vk::Filter::eLinear;
@@ -837,21 +1148,31 @@ void vk_context::createTextureSampler()
     samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
     samplerInfo.compareEnable = vk::False;
     samplerInfo.compareOp = vk::CompareOp::eAlways;
+    // Jus for the jajas, deberia verse hecha mierda
+    // samplerInfo.minLod = static_cast<float>((float)mipLevels / 2);
     textureSampler = vk::raii::Sampler(device, samplerInfo);
 }
 
-vk::raii::ImageView vk_context::createImageView(vk::raii::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags)
+vk::raii::ImageView vk_context::createImageView(vk::raii::Image& image,
+                                                vk::Format format,
+                                                vk::ImageAspectFlags aspectFlags,
+                                                uint32_t mipLevels)
 {
+    LOG_FUNCTION()
+
     vk::ImageViewCreateInfo viewInfo = {};
     viewInfo.image = image,
     viewInfo.viewType = vk::ImageViewType::e2D,
     viewInfo.format = format,
     viewInfo.subresourceRange = { aspectFlags, 0, 1, 0, 1 };
+    /* estoy sobreescribiendo uno de los parametros de arriba */
+    viewInfo.subresourceRange.levelCount = mipLevels;
     return vk::raii::ImageView(device, viewInfo);
 }
 
 void vk_context::createImage(uint32_t width,
                  uint32_t height,
+                 uint32_t mipLevels,
                  vk::Format format,
                  vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage,
@@ -859,13 +1180,15 @@ void vk_context::createImage(uint32_t width,
                  vk::raii::Image& image,
                  vk::raii::DeviceMemory& imageMemory)
 {
+    LOG_FUNCTION()
+
     vk::ImageCreateInfo imageInfo = {};
     imageInfo.imageType = vk::ImageType::e2D;
     imageInfo.format = format;
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = vk::SampleCountFlagBits::e1;
     imageInfo.tiling = tiling;
@@ -889,6 +1212,8 @@ void vk_context::copyBufferToImage(const vk::raii::Buffer& buffer,
                        uint32_t width,
                        uint32_t height)
 {
+    LOG_FUNCTION()
+
     std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();
     vk::BufferImageCopy region = {};
     region.bufferOffset = 0;
@@ -909,6 +1234,8 @@ void vk_context::copyBufferToImage(const vk::raii::Buffer& buffer,
 
 void vk_context::loadModel()
 {
+    LOG_FUNCTION()
+
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
@@ -949,6 +1276,8 @@ void vk_context::loadModel()
 
 void vk_context::createVertexBuffer()
 {
+    LOG_FUNCTION()
+
     vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
     vk::raii::Buffer stagingBuffer({});
     vk::raii::DeviceMemory stagingBufferMemory({});
@@ -965,6 +1294,8 @@ void vk_context::createVertexBuffer()
 
 void vk_context::createIndexBuffer()
 {
+    LOG_FUNCTION()
+
     vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
     vk::raii::Buffer stagingBuffer({});
@@ -982,6 +1313,8 @@ void vk_context::createIndexBuffer()
 
 void vk_context::createUniformBuffers()
 {
+    LOG_FUNCTION()
+
     uniformBuffers.clear();
     uniformBuffersMemory.clear();
     uniformBuffersMapped.clear();
@@ -999,6 +1332,8 @@ void vk_context::createUniformBuffers()
 
 void vk_context::createDescriptorPool()
 {
+    LOG_FUNCTION()
+
     std::array poolSize {
         vk::DescriptorPoolSize( vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
         vk::DescriptorPoolSize(  vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT)
@@ -1014,6 +1349,8 @@ void vk_context::createDescriptorPool()
 
 void vk_context::createDescriptorSets()
 {
+    LOG_FUNCTION()
+
     std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
     vk::DescriptorSetAllocateInfo allocInfo = {};
     allocInfo.descriptorPool = descriptorPool;
@@ -1064,6 +1401,8 @@ void vk_context::createBuffer(vk::DeviceSize size,
                   vk::raii::Buffer& buffer,
                   vk::raii::DeviceMemory& bufferMemory)
 {
+    LOG_FUNCTION()
+
     vk::BufferCreateInfo bufferInfo = {};
     bufferInfo.size = size;
     bufferInfo.usage = usage;
@@ -1081,6 +1420,8 @@ void vk_context::createBuffer(vk::DeviceSize size,
 
 std::unique_ptr<vk::raii::CommandBuffer> vk_context::beginSingleTimeCommands()
 {
+    LOG_FUNCTION()
+
     vk::CommandBufferAllocateInfo allocInfo = {};
     allocInfo.commandPool = commandPool;
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -1098,6 +1439,8 @@ std::unique_ptr<vk::raii::CommandBuffer> vk_context::beginSingleTimeCommands()
 
 void vk_context::endSingleTimeCommands(const vk::raii::CommandBuffer& commandBuffer) const
 {
+    LOG_FUNCTION()
+
     commandBuffer.end();
 
     vk::SubmitInfo submitInfo = {};
@@ -1110,6 +1453,8 @@ void vk_context::endSingleTimeCommands(const vk::raii::CommandBuffer& commandBuf
 
 void vk_context::copyBuffer(vk::raii::Buffer & srcBuffer, vk::raii::Buffer & dstBuffer, vk::DeviceSize size)
 {
+    LOG_FUNCTION()
+
     vk::CommandBufferAllocateInfo allocInfo = {};
     allocInfo.commandPool = commandPool;
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
@@ -1141,6 +1486,8 @@ void vk_context::copyBuffer(vk::raii::Buffer & srcBuffer, vk::raii::Buffer & dst
 
 uint32_t vk_context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
 {
+    LOG_FUNCTION()
+
     vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
 
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
@@ -1154,6 +1501,8 @@ uint32_t vk_context::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags
 
 void vk_context::createCommandBuffers()
 {
+    LOG_FUNCTION()
+
     commandBuffers.clear();
     vk::CommandBufferAllocateInfo allocInfo = {};
     allocInfo.commandPool = commandPool;
@@ -1164,6 +1513,8 @@ void vk_context::createCommandBuffers()
 
 void vk_context::recordCommandBuffer(uint32_t imageIndex)
 {
+    // LOG_FUNCTION() Es llamada cada frame
+
     commandBuffers[currentFrame].begin({});
     // Before starting rendering, transition the swapchain image to COLOR_ATTACHMENT_OPTIMAL
     transition_image_layout(
@@ -1259,7 +1610,7 @@ void vk_context::transition_image_layout(
     vk::PipelineStageFlags2 dst_stage_mask
     )
 {
-
+    // LOG_FUNCTION() every frame
 
     vk::ImageMemoryBarrier2 barrier = {};
     barrier.srcStageMask = src_stage_mask;
@@ -1290,6 +1641,8 @@ void vk_context::transition_image_layout(
 
 void vk_context::createSyncObjects()
 {
+    LOG_FUNCTION()
+
     presentCompleteSemaphore.clear();
     renderFinishedSemaphore.clear();
     inFlightFences.clear();
@@ -1310,6 +1663,8 @@ void vk_context::createSyncObjects()
 
 void vk_context::initVulkan()
 {
+    LOG_FUNCTION()
+
     createInstance();
     setupDebugMessenger();
     createSurface();
@@ -1336,6 +1691,8 @@ void vk_context::initVulkan()
 
 void vk_context::updateUniformBuffer(uint32_t currentImage) const
 {
+    // LOG_FUNCTION() every frame
+
     static auto startTime = std::chrono::high_resolution_clock::now();
 
     auto currentTime = std::chrono::high_resolution_clock::now();
@@ -1352,6 +1709,8 @@ void vk_context::updateUniformBuffer(uint32_t currentImage) const
 
 void vk_context::drawFrame()
 {
+    // LOG_FUNCTION() every frame
+
     /* TODO: a while loop that does nothing, idk how it compiles, but i think taht i dont like it */
     while ( vk::Result::eTimeout == device.waitForFences( *inFlightFences[currentFrame], vk::True, UINT64_MAX ) )
         ;
@@ -1418,6 +1777,8 @@ void vk_context::drawFrame()
 
 [[nodiscard]] vk::raii::ShaderModule vk_context::createShaderModule(const std::vector<char>& code) const
 {
+    LOG_FUNCTION()
+
     vk::ShaderModuleCreateInfo createInfo = {};
     createInfo.codeSize = code.size();
     createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
@@ -1429,6 +1790,8 @@ void vk_context::drawFrame()
 
 vk::Extent2D vk_context::chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities)
 {
+    LOG_FUNCTION()
+
     if (capabilities.currentExtent.width != 0xFFFFFFFF) {
         return capabilities.currentExtent;
     }
@@ -1447,6 +1810,8 @@ vk_context::~vk_context()
 }
 
 void vk_context::run() {
+    LOG_FUNCTION()
+
     initWindow();
     initVulkan();
     mainLoop();
