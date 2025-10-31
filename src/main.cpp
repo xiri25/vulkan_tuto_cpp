@@ -826,7 +826,7 @@ void vk_context::createDepthResources()
                 vk::MemoryPropertyFlagBits::eDeviceLocal,
                 depthImage,
                 depthImageMemory);
-    depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, mipLevels);
+    depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
 }
 
 vk::Format vk_context::findSupportedFormat(const std::vector<vk::Format>& candidates,
