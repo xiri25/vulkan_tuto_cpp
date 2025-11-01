@@ -14,7 +14,6 @@
 #include <array>
 #include <chrono>
 #include <assert.h>
-#include <vulkan/vulkan_core.h>
 
 // WTF
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
@@ -24,25 +23,20 @@ import vulkan_hpp;
 #endif
 
 #define GLFW_INCLUDE_VULKAN // REQUIRED only for GLFW CreateWindowSurface.
-#include "../vendor/glfw/include/GLFW/glfw3.h"
+#include <GLFW/glfw3.h>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_ENABLE_EXPERIMENTAL
-// #include <glm/glm.hpp>
-// #include <glm/gtc/matrix_transform.hpp>
-// #include <glm/gtx/hash.hpp>
-#include "../vendor/glm/glm/glm.hpp"
-#include "../vendor/glm/glm/gtc/matrix_transform.hpp"
-#include "../vendor/glm/glm/gtx/hash.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/hash.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
-// #include <stb/stb_image.h>
-#include "../vendor/stb/stb_image.h"
+#include <stb/stb_image.h>
 
 #define TINYOBJLOADER_IMPLEMENTATION
-// #include <tinyobjloader/tiny_obj_loader.h>
-#include "../vendor/tinyobjloader/tiny_obj_loader.h"
+#include <tiny_obj_loader.h>
 
 #define LOG_FUNCTIONS 1
 #if LOG_FUNCTIONS
