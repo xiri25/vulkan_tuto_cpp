@@ -5,6 +5,7 @@
 #include <fstream>
 #include <ranges>
 #include <stdexcept>
+#include <valarray>
 #include <vector>
 #include <cstring>
 #include <cstdlib>
@@ -156,6 +157,24 @@ private:
     uint32_t semaphoreIndex = 0;
     uint32_t currentFrame = 0;
 
+    vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
+
+    /*
+     * In MSAA, each pixel is sampled in an offscreen buffer which
+     * is then rendered to the screen. This new buffer is slightly
+     * different from regular images we’ve been rendering to - they
+     * have to be able to store more than one sample per pixel.
+     * Once a multi-sampled buffer is created, it has to be resolved
+     * to the default framebuffer (which stores only a single sample
+     * per pixel). This is why we have to create an additional render
+     * target and modify our current drawing process. We only need
+     * one render target since only one drawing operation is
+     * active at a time, just like with the depth buffer.
+    */
+    vk::raii::Image colorImage = nullptr;
+    vk::raii::DeviceMemory colorImageMemory = nullptr;
+    vk::raii::ImageView colorImageView = nullptr;
+
     bool framebufferResized = false;
 
     std::vector<const char*> requiredDeviceExtension = {
@@ -195,6 +214,7 @@ private:
     void createImage(uint32_t width,
                      uint32_t height,
                      uint32_t mipLevels,
+                     vk::SampleCountFlagBits numSamples,
                      vk::Format format,
                      vk::ImageTiling tiling,
                      vk::ImageUsageFlags usage,
@@ -246,8 +266,74 @@ private:
                          int32_t texWidth,
                          int32_t texHeight,
                          uint32_t mipLevels);
+    vk::SampleCountFlagBits getMaxUsableSampleCount();
+    void createColorResources();
+    void transition_image_layout_custom(        
+            vk::raii::Image& image,
+            vk::ImageLayout old_layout,
+            vk::ImageLayout new_layout,
+            vk::AccessFlags2 src_access_mask,
+            vk::AccessFlags2 dst_access_mask,
+            vk::PipelineStageFlags2 src_stage_mask,
+            vk::PipelineStageFlags2 dst_stage_mask,
+            vk::ImageAspectFlags aspect_mask);
 
 };
+
+void vk_context::createColorResources()
+{
+    vk::Format colorFormat = swapChainSurfaceFormat.format;
+
+    /*
+     * We will now create a multi-sampled color buffer
+     * We’re also using only one mip level, since this
+     * is enforced by the Vulkan specification in case
+     * of images with more than one sample per pixel.
+     * Also, this color buffer doesn’t need mipmaps
+     * since it’s not going to be used as a texture
+    */
+
+    createImage(swapChainExtent.width,
+                swapChainExtent.height,
+                1,
+                msaaSamples,
+                colorFormat,
+                vk::ImageTiling::eOptimal,
+                vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment, 
+                vk::MemoryPropertyFlagBits::eDeviceLocal,
+                colorImage,
+                colorImageMemory);
+    colorImageView = createImageView(colorImage, colorFormat, vk::ImageAspectFlagBits::eColor, 1);
+}
+
+vk::SampleCountFlagBits vk_context::getMaxUsableSampleCount()
+{
+    /*
+     * The exact maximum number of samples can be extracted
+     * from VkPhysicalDeviceProperties associated with our
+     * selected physical device. We’re using a depth buffer,
+     * so we have to take into account the sample count for
+     * both color and depth. The highest sample count that
+     * both support (and) will be the maximum we can support
+    */
+
+    /* TODO: Cached this to not need to ask again */
+
+    /* It was like that for whatever reason */
+    //vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice->getProperties();
+    vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
+
+
+    vk::SampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+    if (counts & vk::SampleCountFlagBits::e64) { return vk::SampleCountFlagBits::e64; }
+    if (counts & vk::SampleCountFlagBits::e32) { return vk::SampleCountFlagBits::e32; }
+    if (counts & vk::SampleCountFlagBits::e16) { return vk::SampleCountFlagBits::e16; }
+    if (counts & vk::SampleCountFlagBits::e8) { return vk::SampleCountFlagBits::e8; }
+    if (counts & vk::SampleCountFlagBits::e4) { return vk::SampleCountFlagBits::e4; }
+    if (counts & vk::SampleCountFlagBits::e2) { return vk::SampleCountFlagBits::e2; }
+
+    return vk::SampleCountFlagBits::e1;
+}
 
 void vk_context::transitionImageLayout(const vk::raii::Image& image,
                                        vk::ImageLayout oldLayout,
@@ -450,6 +536,7 @@ void vk_context::recreateSwapChain()
     cleanupSwapChain();
     createSwapChain();
     createImageViews();
+    createColorResources();
     createDepthResources();
 }
 
@@ -575,6 +662,19 @@ void vk_context::pickPhysicalDevice()
     if ( devIter != devices.end() )
     {
         physicalDevice = *devIter;
+
+        /*
+         * NOTE:
+         * Por alguna razón esta parte del tutorial no está actualizada
+         * se cree que tiene una funcion llamada isDeviceSuitable()
+         * que la version anterior tenía. XD
+         *
+         * Esto es al final lo que pretende hacer
+         * Una vez escogido el physicalDevice
+         * se puede pedir el numero de samples que
+         * necesita
+        */
+        msaaSamples = getMaxUsableSampleCount();
     }
     else
     {
@@ -729,8 +829,15 @@ void vk_context::createGraphicsPipeline()
     rasterizer.depthBiasEnable = vk::False;
     rasterizer.lineWidth = 1.0f;
 
+    /*
+     * NOTE:
+     * En la explicación del tutorial aún existe createRenderPass()
+     * y es allí donde añade msaaSamples
+     * Lo añade tanto a colorAttachment como a depthAttachment
+     * pero en el codigo solo lo añade aquí, idk
+    */
     vk::PipelineMultisampleStateCreateInfo multisampling = {};
-    multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+    multisampling.rasterizationSamples = msaaSamples;
     multisampling.sampleShadingEnable = vk::False;
 
     vk::PipelineDepthStencilStateCreateInfo depthStencil = {};
@@ -814,6 +921,7 @@ void vk_context::createDepthResources()
     createImage(swapChainExtent.width,
                 swapChainExtent.height,
                 1,
+                msaaSamples,
                 depthFormat,
                 vk::ImageTiling::eOptimal,
                 vk::ImageUsageFlagBits::eDepthStencilAttachment,
@@ -1093,6 +1201,7 @@ void vk_context::createTextureImage()
     */
 
     createImage(texWidth, texHeight, mipLevels,
+                vk::SampleCountFlagBits::e1,
                 vk::Format::eR8G8B8A8Srgb,
                 vk::ImageTiling::eOptimal,
                 vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
@@ -1167,6 +1276,7 @@ vk::raii::ImageView vk_context::createImageView(vk::raii::Image& image,
 void vk_context::createImage(uint32_t width,
                  uint32_t height,
                  uint32_t mipLevels,
+                 vk::SampleCountFlagBits numSamples,
                  vk::Format format,
                  vk::ImageTiling tiling,
                  vk::ImageUsageFlags usage,
@@ -1184,7 +1294,7 @@ void vk_context::createImage(uint32_t width,
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
-    imageInfo.samples = vk::SampleCountFlagBits::e1;
+    imageInfo.samples = numSamples;
     imageInfo.tiling = tiling;
     imageInfo.usage = usage;
     imageInfo.sharingMode = vk::SharingMode::eExclusive;
@@ -1505,6 +1615,42 @@ void vk_context::createCommandBuffers()
     commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 }
 
+void vk_context::transition_image_layout_custom(        
+        vk::raii::Image& image,
+        vk::ImageLayout old_layout,
+        vk::ImageLayout new_layout,
+        vk::AccessFlags2 src_access_mask,
+        vk::AccessFlags2 dst_access_mask,
+        vk::PipelineStageFlags2 src_stage_mask,
+        vk::PipelineStageFlags2 dst_stage_mask,
+        vk::ImageAspectFlags aspect_mask
+        )
+{
+    // LOG_FUNCTION() is call every frame
+
+        vk::ImageMemoryBarrier2 barrier = {};
+        barrier.srcStageMask = src_stage_mask;
+        barrier.srcAccessMask = src_access_mask;
+        barrier.dstStageMask = dst_stage_mask;
+        barrier.dstAccessMask = dst_access_mask;
+        barrier.oldLayout = old_layout;
+        barrier.newLayout = new_layout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange.aspectMask = aspect_mask;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        vk::DependencyInfo dependency_info = {};
+        dependency_info.dependencyFlags = {};
+        dependency_info.imageMemoryBarrierCount = 1;
+        dependency_info.pImageMemoryBarriers = &barrier;
+        commandBuffers[currentFrame].pipelineBarrier2(dependency_info);
+    }
+
 void vk_context::recordCommandBuffer(uint32_t imageIndex)
 {
     // LOG_FUNCTION() Es llamada cada frame
@@ -1520,56 +1666,120 @@ void vk_context::recordCommandBuffer(uint32_t imageIndex)
         vk::PipelineStageFlagBits2::eTopOfPipe,                   // srcStage
         vk::PipelineStageFlagBits2::eColorAttachmentOutput        // dstStage
     );
+
+    /*
+     * TODO: If msaa, there is more things to get into if msaa in other places
+     * Si dejo de usar msaa, no se si tengo que volver al code path anterior o
+     * este nuevo es optimizado por el driver
+    */
+
+    // Transition the multisampled color image to COLOR_ATTACHMENT_OPTIMAL
+    transition_image_layout_custom(
+        colorImage,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::ImageAspectFlagBits::eColor
+    );
+ 
+    // Transition the depth image to DEPTH_ATTACHMENT_OPTIMAL
+    transition_image_layout_custom(
+        depthImage,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eDepthAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+        vk::PipelineStageFlagBits2::eTopOfPipe,
+        vk::PipelineStageFlagBits2::eEarlyFragmentTests,
+        vk::ImageAspectFlagBits::eDepth
+    );
+
+    /* Este es el code path antes del msaa */
     // Transition depth image to depth attachment optimal layout
-    vk::ImageMemoryBarrier2 depthBarrier = {};
-    depthBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
-    depthBarrier.srcAccessMask = {};
-    depthBarrier.dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests;
-    depthBarrier.dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
-    depthBarrier.oldLayout = vk::ImageLayout::eUndefined;
-    depthBarrier.newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-    depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    depthBarrier.image = depthImage;
+    // vk::ImageMemoryBarrier2 depthBarrier = {};
+    // depthBarrier.srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe;
+    // depthBarrier.srcAccessMask = {};
+    // depthBarrier.dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests;
+    // depthBarrier.dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
+    // depthBarrier.oldLayout = vk::ImageLayout::eUndefined;
+    // depthBarrier.newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    // depthBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    // depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    // depthBarrier.image = depthImage;
 
-    /* NOTE: Maybe it needs a fix bc using = is operator overloading cpp ¯\_(ツ)_/¯ */
-    // depthBarrier.subresourceRange = {};
-    depthBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-    depthBarrier.subresourceRange.baseMipLevel = 0;
-    depthBarrier.subresourceRange.levelCount = 1;
-    depthBarrier.subresourceRange.baseArrayLayer = 0;
-    depthBarrier.subresourceRange.layerCount = 1;
+    // /* NOTE: Maybe it needs a fix bc using = is operator overloading cpp ¯\_(ツ)_/¯ */
+    // // depthBarrier.subresourceRange = {};
 
-    vk::DependencyInfo depthDependencyInfo = {};
-    depthDependencyInfo.dependencyFlags = {};
-    depthDependencyInfo.imageMemoryBarrierCount = 1;
-    depthDependencyInfo.pImageMemoryBarriers = &depthBarrier;
-    commandBuffers[currentFrame].pipelineBarrier2(depthDependencyInfo);
+    // depthBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    // depthBarrier.subresourceRange.baseMipLevel = 0;
+    // depthBarrier.subresourceRange.levelCount = 1;
+    // depthBarrier.subresourceRange.baseArrayLayer = 0;
+    // depthBarrier.subresourceRange.layerCount = 1;
 
+    // vk::DependencyInfo depthDependencyInfo = {};
+    // depthDependencyInfo.dependencyFlags = {};
+    // depthDependencyInfo.imageMemoryBarrierCount = 1;
+    // depthDependencyInfo.pImageMemoryBarriers = &depthBarrier;
+    // commandBuffers[currentFrame].pipelineBarrier2(depthDependencyInfo);
+
+    /* END If msaa, there is more things to get into if msaa in other places */
+    
     vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
     vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
-    /* NOTE: Maybe when rewritting in C, i can use {.member = value} and make the struct const, idk */
-    vk::RenderingAttachmentInfo colorAttachmentInfo = {};
-    colorAttachmentInfo.imageView = swapChainImageViews[imageIndex];
-    colorAttachmentInfo.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-    colorAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
-    colorAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
-    colorAttachmentInfo.clearValue = clearColor;
+     // Color attachment (multisampled) with resolve attachment
+    vk::RenderingAttachmentInfo colorAttachment = {};
+    colorAttachment.imageView = colorImageView;
+    colorAttachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    colorAttachment.resolveMode = vk::ResolveModeFlagBits::eAverage;
+    colorAttachment.resolveImageView = swapChainImageViews[imageIndex];
+    colorAttachment.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    colorAttachment.clearValue = clearColor;
 
-    vk::RenderingAttachmentInfo depthAttachmentInfo = {};
-    depthAttachmentInfo.imageView = depthImageView;
-    depthAttachmentInfo.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-    depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
-    depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eDontCare;
-    depthAttachmentInfo.clearValue = clearDepth;
+    /* NOTE: Maybe when rewritting in C, i can use {.member = value} and make the struct const, idk */
+
+    // Más del code path sin msaa
+    // vk::RenderingAttachmentInfo colorAttachmentInfo = {};
+    // colorAttachmentInfo.imageView = swapChainImageViews[imageIndex];
+    // colorAttachmentInfo.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    // colorAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
+    // colorAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
+    // colorAttachmentInfo.clearValue = clearColor;
+
+    // vk::RenderingAttachmentInfo depthAttachmentInfo = {};
+    // depthAttachmentInfo.imageView = depthImageView;
+    // depthAttachmentInfo.imageLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    // depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
+    // depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eDontCare;
+    // depthAttachmentInfo.clearValue = clearDepth;
+
+    // vk::RenderingInfo renderingInfo = {};
+    // renderingInfo.renderArea = { .offset = { 0, 0 }, .extent = swapChainExtent };
+    // renderingInfo.layerCount = 1;
+    // renderingInfo.colorAttachmentCount = 1;
+    // renderingInfo.pColorAttachments = &colorAttachmentInfo;
+    // renderingInfo.pDepthAttachment = &depthAttachmentInfo;
+
+    
+    // Depth attachment
+    vk::RenderingAttachmentInfo depthAttachment = {};
+    depthAttachment.imageView = depthImageView;
+    depthAttachment.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.clearValue = clearDepth;
 
     vk::RenderingInfo renderingInfo = {};
     renderingInfo.renderArea = { .offset = { 0, 0 }, .extent = swapChainExtent };
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachments = &colorAttachmentInfo;
-    renderingInfo.pDepthAttachment = &depthAttachmentInfo;
+    renderingInfo.pColorAttachments = &colorAttachment;
+    renderingInfo.pDepthAttachment = &depthAttachment;
 
     commandBuffers[currentFrame].beginRendering(renderingInfo);
     commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
@@ -1669,6 +1879,7 @@ void vk_context::initVulkan()
     createDescriptorSetLayout();
     createGraphicsPipeline();
     createCommandPool();
+    createColorResources();
     createDepthResources();
     createTextureImage();
     createTextureImageView();
